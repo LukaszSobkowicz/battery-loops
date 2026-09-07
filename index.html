@@ -13,6 +13,7 @@
   .statusbar.error { color: #b42318; }
   .controls { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 15px; }
   button { padding: 8px 12px; cursor: pointer; border: 1px solid #bbb; border-radius: 6px; background: white; }
+  button.primary { font-weight: 700; }
   table { width: 100%; border-collapse: collapse; background: white; }
   th, td { padding: 10px; border-bottom: 1px solid #ddd; text-align: left; vertical-align: middle; }
   th { background: #eee; }
@@ -28,8 +29,10 @@
 <div id="connectionStatus" class="statusbar warn">Loading shared schedule…</div>
 
 <div class="controls">
+  <button class="primary" onclick="publishChanges()">Publish changes</button>
   <button onclick="reloadShared()">Reload shared data</button>
   <button onclick="resetLocalChanges()">Discard local changes</button>
+  <button onclick="forgetToken()">Forget editor token</button>
 </div>
 
 <table>
@@ -47,12 +50,17 @@
 </table>
 
 <p class="note">
-  The shared schedule comes from <strong>data.json</strong> in the GitHub repository, so every user sees the same published values.
-  Changes made directly on this page are saved only in this browser. To change the shared schedule for everyone, edit <strong>data.json</strong> in GitHub and commit the change.
+  Everyone loads the shared schedule from <strong>data.json</strong>. Editors can change values here and click <strong>Publish changes</strong> to commit the new JSON directly to GitHub. The GitHub token is entered at runtime and kept only in this browser session; it is never written into the repository.
 </p>
 
 <script>
 const LOCAL_KEY = "batteryLoopsLocal";
+const TOKEN_KEY = "batteryLoopsGithubToken";
+const OWNER = "LukaszSobkowicz";
+const REPO = "battery-loops";
+const BRANCH = "main";
+const DATA_PATH = "data.json";
+
 let sharedLoops = [];
 let loops = [];
 
@@ -79,6 +87,21 @@ function writeLocal() {
   localStorage.setItem(LOCAL_KEY, JSON.stringify(loops));
 }
 
+function getToken() {
+  let token = sessionStorage.getItem(TOKEN_KEY);
+  if (token) return token;
+  token = prompt("Paste a fine-grained GitHub token with Contents: Read and write access to LukaszSobkowicz/battery-loops. It will be kept only for this browser session.");
+  if (!token) return null;
+  token = token.trim();
+  sessionStorage.setItem(TOKEN_KEY, token);
+  return token;
+}
+
+function forgetToken() {
+  sessionStorage.removeItem(TOKEN_KEY);
+  setStatus("Editor token removed from this browser session.", "ok");
+}
+
 async function loadShared() {
   try {
     setStatus("Loading shared schedule…", "warn");
@@ -93,7 +116,7 @@ async function loadShared() {
     render();
 
     setStatus(
-      local ? "Shared schedule loaded; this browser also has local changes." : "Shared schedule loaded.",
+      local ? "Shared schedule loaded; this browser has unpublished local changes." : "Shared schedule loaded.",
       local ? "warn" : "ok"
     );
   } catch (err) {
@@ -115,6 +138,70 @@ async function resetLocalChanges() {
   loops = structuredClone(sharedLoops);
   render();
   setStatus("Local changes discarded. Showing shared schedule.", "ok");
+}
+
+function encodeBase64Utf8(text) {
+  const bytes = new TextEncoder().encode(text);
+  let binary = "";
+  bytes.forEach(b => binary += String.fromCharCode(b));
+  return btoa(binary);
+}
+
+async function githubRequest(url, options = {}) {
+  const token = getToken();
+  if (!token) throw new Error("No GitHub token provided.");
+  const headers = {
+    "Accept": "application/vnd.github+json",
+    "Authorization": `Bearer ${token}`,
+    "X-GitHub-Api-Version": "2022-11-28",
+    ...(options.headers || {})
+  };
+  return fetch(url, { ...options, headers });
+}
+
+async function publishChanges() {
+  try {
+    setStatus("Publishing changes to GitHub…", "warn");
+
+    const apiUrl = `https://api.github.com/repos/${OWNER}/${REPO}/contents/${DATA_PATH}?ref=${BRANCH}`;
+    const current = await githubRequest(apiUrl);
+
+    if (current.status === 401 || current.status === 403) {
+      sessionStorage.removeItem(TOKEN_KEY);
+      throw new Error("GitHub rejected the token. Use a fine-grained token with Contents: Read and write access to this repository.");
+    }
+    if (!current.ok) throw new Error(`Could not read data.json from GitHub (HTTP ${current.status}).`);
+
+    const currentFile = await current.json();
+    const jsonText = JSON.stringify(loops, null, 2) + "\n";
+
+    const update = await githubRequest(`https://api.github.com/repos/${OWNER}/${REPO}/contents/${DATA_PATH}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        message: "Update battery schedule from web page",
+        content: encodeBase64Utf8(jsonText),
+        sha: currentFile.sha,
+        branch: BRANCH
+      })
+    });
+
+    if (update.status === 401 || update.status === 403) {
+      sessionStorage.removeItem(TOKEN_KEY);
+      throw new Error("GitHub rejected the write. Check that the token has Contents: Read and write permission for this repository.");
+    }
+    if (!update.ok) {
+      const detail = await update.text();
+      throw new Error(`GitHub save failed (HTTP ${update.status}). ${detail}`);
+    }
+
+    sharedLoops = structuredClone(loops);
+    localStorage.removeItem(LOCAL_KEY);
+    setStatus("Published successfully. Other users will see the new schedule after GitHub Pages refreshes.", "ok");
+  } catch (err) {
+    console.error(err);
+    setStatus(err.message || "Could not publish changes.", "error");
+  }
 }
 
 function dateDiff(date1, date2) {
@@ -169,7 +256,7 @@ function render() {
 
 function markEdited() {
   writeLocal();
-  setStatus("Local changes saved in this browser only. Edit data.json in GitHub to update everyone.", "warn");
+  setStatus("Unpublished changes — click Publish changes.", "warn");
 }
 
 function updateName(index, value) {
