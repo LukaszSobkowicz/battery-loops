@@ -16,6 +16,9 @@
   .editor input { min-width: 280px; padding: 8px; }
   button { padding: 8px 12px; cursor: pointer; border: 1px solid #bbb; border-radius: 6px; background: white; }
   button.primary { font-weight: 700; }
+  button.sortButton { border: 0; background: transparent; padding: 0; font: inherit; font-weight: 700; }
+  button.sortButton:hover { text-decoration: underline; }
+  button.orderButton { padding: 5px 8px; }
   table { width: 100%; border-collapse: collapse; background: white; }
   th, td { padding: 10px; border-bottom: 1px solid #ddd; text-align: left; vertical-align: middle; }
   th { background: #eee; }
@@ -47,19 +50,19 @@
 <table>
   <thead>
     <tr>
-      <th>Loop</th>
-      <th>Last change</th>
+      <th><button class="sortButton" onclick="sortLoops('name')">Loop <span id="sort-name"></span></button></th>
+      <th><button class="sortButton" onclick="sortLoops('lastChange')">Last change <span id="sort-lastChange"></span></button></th>
       <th>Interval</th>
-      <th>Next change</th>
+      <th><button class="sortButton" onclick="sortLoops('nextChange')">Next change <span id="sort-nextChange"></span></button></th>
       <th>Status</th>
-      <th></th>
+      <th>Order / actions</th>
     </tr>
   </thead>
   <tbody id="tableBody"></tbody>
 </table>
 
 <p class="note">
-  The shared schedule is loaded from <strong>data.json</strong> every time this page opens. Edit it here, then click <strong>Publish changes</strong>. The editor token can be remembered only in this browser/device; it is never written to GitHub or the public page source.
+  New loops use a default interval of <strong>45 days</strong>. Click <strong>Loop</strong>, <strong>Last change</strong>, or <strong>Next change</strong> to sort ascending/descending. Use ↑ and ↓ for manual ordering. Sorting and manual reordering are publishable changes.
 </p>
 
 <script>
@@ -68,7 +71,9 @@ const OWNER = "LukaszSobkowicz";
 const REPO = "battery-loops";
 const BRANCH = "main";
 const DATA_PATH = "data.json";
+const DEFAULT_INTERVAL = 45;
 let loops = [];
+let sortState = { key: null, direction: 1 };
 
 function todayISO() {
   const d = new Date();
@@ -134,6 +139,7 @@ async function loadShared() {
     const data = await response.json();
     if (!Array.isArray(data)) throw new Error("data.json must contain a JSON array");
     loops = structuredClone(data);
+    sortState = { key: null, direction: 1 };
     render();
     setStatus("Shared schedule loaded from GitHub.", "ok");
   } catch (err) {
@@ -224,6 +230,47 @@ function escapeHtml(value) {
   return String(value).replace(/[&<>'"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[c]));
 }
 
+function updateSortIndicators() {
+  ["name", "lastChange", "nextChange"].forEach(key => {
+    const el = document.getElementById(`sort-${key}`);
+    if (!el) return;
+    el.textContent = sortState.key === key ? (sortState.direction === 1 ? "▲" : "▼") : "";
+  });
+}
+
+function sortLoops(key) {
+  if (sortState.key === key) sortState.direction *= -1;
+  else sortState = { key, direction: 1 };
+
+  const direction = sortState.direction;
+  loops.sort((a, b) => {
+    if (key === "name") {
+      return String(a.name || "").localeCompare(String(b.name || ""), undefined, { numeric: true, sensitivity: "base" }) * direction;
+    }
+    if (key === "lastChange") {
+      return String(a.lastChange || "").localeCompare(String(b.lastChange || "")) * direction;
+    }
+    if (key === "nextChange") {
+      const aTime = calculateNext(a.lastChange, a.interval || DEFAULT_INTERVAL).getTime();
+      const bTime = calculateNext(b.lastChange, b.interval || DEFAULT_INTERVAL).getTime();
+      return (aTime - bTime) * direction;
+    }
+    return 0;
+  });
+
+  markEdited();
+  render();
+}
+
+function moveLoop(index, delta) {
+  const target = index + delta;
+  if (target < 0 || target >= loops.length) return;
+  [loops[index], loops[target]] = [loops[target], loops[index]];
+  sortState = { key: null, direction: 1 };
+  markEdited();
+  render();
+}
+
 function render() {
   const body = document.getElementById("tableBody");
   body.innerHTML = "";
@@ -231,7 +278,8 @@ function render() {
   today.setHours(0,0,0,0);
 
   loops.forEach((loop, index) => {
-    const next = calculateNext(loop.lastChange, loop.interval);
+    const interval = Number(loop.interval) || DEFAULT_INTERVAL;
+    const next = calculateNext(loop.lastChange, interval);
     const days = dateDiff(today, next);
     let status, css;
     if (days < 0) { status = `${Math.abs(days)} days overdue`; css = "overdue"; }
@@ -243,12 +291,19 @@ function render() {
     row.innerHTML = `
       <td><input value="${escapeHtml(loop.name)}" onchange="updateName(${index}, this.value)"></td>
       <td><input type="date" value="${escapeHtml(loop.lastChange)}" onchange="updateDate(${index}, this.value)"></td>
-      <td><input type="number" min="1" value="${Number(loop.interval) || 30}" style="width:70px" onchange="updateInterval(${index}, this.value)"> days</td>
+      <td><input type="number" min="1" value="${interval}" style="width:70px" onchange="updateInterval(${index}, this.value)"> days</td>
       <td>${formatDate(next)}</td>
       <td class="${css}">${status}</td>
-      <td><button onclick="changedToday(${index})">Changed today</button> <button onclick="removeLoop(${index})" title="Remove loop">×</button></td>`;
+      <td>
+        <button class="orderButton" onclick="moveLoop(${index}, -1)" title="Move up" ${index === 0 ? "disabled" : ""}>↑</button>
+        <button class="orderButton" onclick="moveLoop(${index}, 1)" title="Move down" ${index === loops.length - 1 ? "disabled" : ""}>↓</button>
+        <button onclick="changedToday(${index})">Changed today</button>
+        <button onclick="removeLoop(${index})" title="Remove loop">×</button>
+      </td>`;
     body.appendChild(row);
   });
+
+  updateSortIndicators();
 }
 
 function markEdited() { setStatus("Unpublished changes — click Publish changes.", "warn"); }
@@ -256,8 +311,8 @@ function updateName(index, value) { loops[index].name = value; markEdited(); }
 function updateDate(index, value) { loops[index].lastChange = value; markEdited(); render(); }
 function updateInterval(index, value) { loops[index].interval = Math.max(1, Number(value) || 1); markEdited(); render(); }
 function changedToday(index) { loops[index].lastChange = todayISO(); markEdited(); render(); }
-function addLoop() { loops.push({ name: `Loop ${loops.length + 1}`, lastChange: todayISO(), interval: 30 }); markEdited(); render(); }
-function removeLoop(index) { loops.splice(index, 1); markEdited(); render(); }
+function addLoop() { loops.push({ name: `Loop ${loops.length + 1}`, lastChange: todayISO(), interval: DEFAULT_INTERVAL }); sortState = { key: null, direction: 1 }; markEdited(); render(); }
+function removeLoop(index) { loops.splice(index, 1); sortState = { key: null, direction: 1 }; markEdited(); render(); }
 
 updateTokenState();
 loadShared();
