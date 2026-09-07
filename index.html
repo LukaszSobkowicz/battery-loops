@@ -29,6 +29,7 @@
 <div id="connectionStatus" class="statusbar warn">Loading shared schedule…</div>
 
 <div class="controls">
+  <button onclick="addLoop()">+ Add loop</button>
   <button class="primary" onclick="publishChanges()">Publish changes</button>
   <button onclick="reloadShared()">Reload shared data</button>
   <button onclick="resetLocalChanges()">Discard local changes</button>
@@ -50,7 +51,7 @@
 </table>
 
 <p class="note">
-  Everyone loads the shared schedule from <strong>data.json</strong>. Editors can change values here and click <strong>Publish changes</strong> to commit the new JSON directly to GitHub. The GitHub token is entered at runtime and kept only in this browser session; it is never written into the repository.
+  Everyone loads the shared schedule from <strong>data.json</strong>. Editors can add, remove, or edit loops here and click <strong>Publish changes</strong> to commit the new JSON directly to GitHub. The GitHub token is entered at runtime and kept only in this browser session; it is never written into the repository.
 </p>
 
 <script>
@@ -249,7 +250,10 @@ function render() {
       <td><input type="number" min="1" value="${Number(loop.interval) || 30}" style="width:70px" onchange="updateInterval(${index}, this.value)"> days</td>
       <td>${formatDate(next)}</td>
       <td class="${css}">${status}</td>
-      <td><button onclick="changedToday(${index})">Changed today</button></td>`;
+      <td>
+        <button onclick="changedToday(${index})">Changed today</button>
+        <button onclick="removeLoop(${index})" title="Remove loop">×</button>
+      </td>`;
     body.appendChild(row);
   });
 }
@@ -278,6 +282,22 @@ function updateInterval(index, value) {
 
 function changedToday(index) {
   loops[index].lastChange = todayISO();
+  markEdited();
+  render();
+}
+
+function addLoop() {
+  loops.push({
+    name: `Loop ${loops.length + 1}`,
+    lastChange: todayISO(),
+    interval: 30
+  });
+  markEdited();
+  render();
+}
+
+function removeLoop(index) {
+  loops.splice(index, 1);
   markEdited();
   render();
 }
