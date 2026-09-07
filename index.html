@@ -1,1 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 
+<title>Battery Schedule</title>
+
+<style>
+    body {
+        font-family: system-ui, sans-serif;
+        margin: 20px;
+        background: #f5f5f5;
+    }
+
+    h1 {
+        font-size: 22px;
+    }
+
+    table {
+        width: 100%;
+        border-collapse: collapse;
+        background: white;
+    }
+
+    th, td {
+        padding: 10px;
+        border-bottom: 1px solid #ddd;
+        text-align: left;
+    }
+
+    th {
+        background: #eee;
+    }
+
+    button {
+        padding: 6px 10px;
+        cursor: pointer;
+    }
+
+    .ok {
+        color: green;
+        font-weight: bold;
+    }
+
+    .soon {
+        color: orange;
+        font-weight: bold;
+    }
+
+    .overdue {
+        color: red;
+        font-weight: bold;
+    }
+
+    .controls {
+        margin-bottom: 15px;
+    }
+</style>
+</head>
+
+<body>
+
+<h1>Battery Replacement Schedule</h1>
+
+<div class="controls">
+    <button onclick="addLoop()">+ Add loop</button>
+</div>
+
+<table>
+    <thead>
+        <tr>
+            <th>Loop</th>
+            <th>Last change</th>
+            <th>Interval</th>
+            <th>Next change</th>
+            <th>Status</th>
+            <th></th>
+        </tr>
+    </thead>
+
+    <tbody id="tableBody"></tbody>
+</table>
+
+<script>
+
+let loops = JSON.parse(localStorage.getItem("batteryLoops")) || [
+    {
+        name: "Loop 1",
+        lastChange: new Date().toISOString().slice(0,10),
+        interval: 30
+    }
+];
+
+function save() {
+    localStorage.setItem("batteryLoops", JSON.stringify(loops));
+}
+
+function dateDiff(date1, date2) {
+    return Math.ceil(
+        (date2 - date1) / (1000 * 60 * 60 * 24)
+    );
+}
+
+function calculateNext(lastChange, interval) {
+
+    const date = new Date(lastChange + "T00:00:00");
+
+    date.setDate(date.getDate() + Number(interval));
+
+    return date;
+}
+
+function formatDate(date) {
+
+    return date.toISOString().slice(0,10);
+
+}
+
+function render() {
+
+    const body = document.getElementById("tableBody");
+
+    body.innerHTML = "";
+
+    const today = new Date();
+    today.setHours(0,0,0,0);
+
+    loops.forEach((loop, index) => {
+
+        const next = calculateNext(
+            loop.lastChange,
+            loop.interval
+        );
+
+        const days = dateDiff(today, next);
+
+        let status;
+        let css;
+
+        if (days < 0) {
+
+            status = `${Math.abs(days)} days overdue`;
+            css = "overdue";
+
+        } else if (days === 0) {
+
+            status = "Change today";
+            css = "soon";
+
+        } else if (days <= 5) {
+
+            status = `${days} days`;
+            css = "soon";
+
+        } else {
+
+            status = `${days} days`;
+            css = "ok";
+
+        }
+
+        const row = document.createElement("tr");
+
+        row.innerHTML = `
+
+            <td>
+                <input
+                    value="${loop.name}"
+                    onchange="updateName(${index}, this.value)">
+            </td>
+
+            <td>
+                <input
+                    type="date"
+                    value="${loop.lastChange}"
+                    onchange="updateDate(${index}, this.value)">
+            </td>
+
+            <td>
+                <input
+                    type="number"
+                    min="1"
+                    value="${loop.interval}"
+                    style="width:60px"
+                    onchange="updateInterval(${index}, this.value)">
+                days
+            </td>
+
+            <td>
+                ${formatDate(next)}
+            </td>
+
+            <td class="${css}">
+                ${status}
+            </td>
+
+            <td>
+                <button onclick="changedToday(${index})">
+                    Changed today
+                </button>
+
+                <button onclick="removeLoop(${index})">
+                    ×
+                </button>
+            </td>
+        `;
+
+        body.appendChild(row);
+
+    });
+
+}
+
+function updateName(index, value) {
+
+    loops[index].name = value;
+
+    save();
+
+}
+
+function updateDate(index, value) {
+
+    loops[index].lastChange = value;
+
+    save();
+    render();
+
+}
+
+function updateInterval(index, value) {
+
+    loops[index].interval = Number(value);
+
+    save();
+    render();
+
+}
+
+function changedToday(index) {
+
+    loops[index].lastChange =
+        new Date().toISOString().slice(0,10);
+
+    save();
+    render();
+
+}
+
+function addLoop() {
+
+    loops.push({
+        name: `Loop ${loops.length + 1}`,
+        lastChange: new Date().toISOString().slice(0,10),
+        interval: 30
+    });
+
+    save();
+    render();
+
+}
+
+function removeLoop(index) {
+
+    loops.splice(index, 1);
+
+    save();
+    render();
+
+}
+
+render();
+
+/* Refresh status every hour */
+setInterval(render, 60 * 60 * 1000);
+
+</script>
+
+</body>
+</html>
