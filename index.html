@@ -13,7 +13,6 @@
   .statusbar.error { color: #b42318; }
   .controls { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 15px; }
   button { padding: 8px 12px; cursor: pointer; border: 1px solid #bbb; border-radius: 6px; background: white; }
-  button.primary { font-weight: 700; }
   table { width: 100%; border-collapse: collapse; background: white; }
   th, td { padding: 10px; border-bottom: 1px solid #ddd; text-align: left; vertical-align: middle; }
   th { background: #eee; }
@@ -21,17 +20,16 @@
   .okText { color: green; font-weight: bold; }
   .soon { color: #b36b00; font-weight: bold; }
   .overdue { color: red; font-weight: bold; }
-  .note { margin-top: 14px; font-size: 13px; color: #555; }
+  .note { margin-top: 14px; font-size: 13px; color: #555; max-width: 900px; }
 </style>
 </head>
 <body>
 <h1>Battery Replacement Schedule</h1>
-<div id="connectionStatus" class="statusbar warn">Loading…</div>
+<div id="connectionStatus" class="statusbar warn">Loading shared schedule…</div>
 
 <div class="controls">
-  <button onclick="addLoop()">+ Add loop</button>
-  <button class="primary" onclick="saveShared()">Save for everyone</button>
-  <button onclick="loadShared()">Reload shared data</button>
+  <button onclick="reloadShared()">Reload shared data</button>
+  <button onclick="resetLocalChanges()">Discard local changes</button>
 </div>
 
 <table>
@@ -48,33 +46,15 @@
   <tbody id="tableBody"></tbody>
 </table>
 
-<p class="note">Changes are only shared after clicking <strong>Save for everyone</strong>. If shared storage is unavailable, this page falls back to this browser's local storage.</p>
+<p class="note">
+  The shared schedule comes from <strong>data.json</strong> in the GitHub repository, so every user sees the same published values.
+  Changes made directly on this page are saved only in this browser. To change the shared schedule for everyone, edit <strong>data.json</strong> in GitHub and commit the change.
+</p>
 
-<script type="module">
-import { initializeApp } from "https://www.gstatic.com/firebasejs/12.2.1/firebase-app.js";
-import { getDatabase, ref, get, set } from "https://www.gstatic.com/firebasejs/12.2.1/firebase-database.js";
-
-// Paste your Firebase web-app configuration here.
-// These values are intended to be present in client-side Firebase apps;
-// access control must be enforced with Firebase Realtime Database Rules.
-const firebaseConfig = {
-  apiKey: "PASTE_API_KEY_HERE",
-  authDomain: "PASTE_PROJECT_ID.firebaseapp.com",
-  databaseURL: "https://PASTE_PROJECT_ID-default-rtdb.europe-west1.firebasedatabase.app",
-  projectId: "PASTE_PROJECT_ID",
-  appId: "PASTE_APP_ID_HERE"
-};
-
-const SHARED_PATH = "batteryLoops";
-const LOCAL_KEY = "batteryLoops";
-
-let db = null;
-let sharedReady = false;
-let loops = readLocal() || [defaultLoop()];
-
-function defaultLoop() {
-  return { name: "Loop 1", lastChange: todayISO(), interval: 30 };
-}
+<script>
+const LOCAL_KEY = "batteryLoopsLocal";
+let sharedLoops = [];
+let loops = [];
 
 function todayISO() {
   const d = new Date();
@@ -82,6 +62,12 @@ function todayISO() {
   const m = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
+}
+
+function setStatus(text, kind = "warn") {
+  const el = document.getElementById("connectionStatus");
+  el.textContent = text;
+  el.className = `statusbar ${kind}`;
 }
 
 function readLocal() {
@@ -93,75 +79,42 @@ function writeLocal() {
   localStorage.setItem(LOCAL_KEY, JSON.stringify(loops));
 }
 
-function setStatus(text, kind = "warn") {
-  const el = document.getElementById("connectionStatus");
-  el.textContent = text;
-  el.className = `statusbar ${kind}`;
-}
-
-function firebaseConfigured() {
-  return !Object.values(firebaseConfig).some(v => String(v).includes("PASTE_"));
-}
-
-async function initShared() {
-  if (!firebaseConfigured()) {
-    setStatus("Shared storage is not configured yet — using local storage only.", "warn");
-    render();
-    return;
-  }
-  try {
-    const app = initializeApp(firebaseConfig);
-    db = getDatabase(app);
-    sharedReady = true;
-    await loadShared();
-  } catch (err) {
-    console.error(err);
-    setStatus("Could not connect to shared storage — using local storage.", "error");
-    render();
-  }
-}
-
 async function loadShared() {
-  if (!sharedReady || !db) {
-    setStatus("Shared storage is not configured — showing local data.", "warn");
-    loops = readLocal() || loops;
-    render();
-    return;
-  }
   try {
     setStatus("Loading shared schedule…", "warn");
-    const snap = await get(ref(db, SHARED_PATH));
-    if (snap.exists()) {
-      const value = snap.val();
-      loops = Array.isArray(value) ? value.filter(Boolean) : Object.values(value || {});
-    } else {
-      loops = readLocal() || [defaultLoop()];
-    }
-    writeLocal();
+    const response = await fetch(`data.json?v=${Date.now()}`, { cache: "no-store" });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const data = await response.json();
+    if (!Array.isArray(data)) throw new Error("data.json must contain a JSON array");
+
+    sharedLoops = data;
+    const local = readLocal();
+    loops = Array.isArray(local) ? local : structuredClone(sharedLoops);
     render();
-    setStatus("Shared schedule loaded.", "ok");
+
+    setStatus(
+      local ? "Shared schedule loaded; this browser also has local changes." : "Shared schedule loaded.",
+      local ? "warn" : "ok"
+    );
   } catch (err) {
     console.error(err);
-    setStatus("Could not load shared data — showing local copy.", "error");
-    loops = readLocal() || loops;
+    const local = readLocal();
+    loops = Array.isArray(local) ? local : [];
     render();
+    setStatus("Could not load data.json. Showing local data if available.", "error");
   }
 }
 
-async function saveShared() {
-  writeLocal();
-  if (!sharedReady || !db) {
-    setStatus("Saved only on this device. Configure Firebase to share changes.", "warn");
-    return;
-  }
-  try {
-    setStatus("Saving shared schedule…", "warn");
-    await set(ref(db, SHARED_PATH), loops);
-    setStatus("Saved. Other users will see these dates when they reload.", "ok");
-  } catch (err) {
-    console.error(err);
-    setStatus("Shared save failed. Your local copy is still saved.", "error");
-  }
+async function reloadShared() {
+  localStorage.removeItem(LOCAL_KEY);
+  await loadShared();
+}
+
+async function resetLocalChanges() {
+  localStorage.removeItem(LOCAL_KEY);
+  loops = structuredClone(sharedLoops);
+  render();
+  setStatus("Local changes discarded. Showing shared schedule.", "ok");
 }
 
 function dateDiff(date1, date2) {
@@ -188,12 +141,14 @@ function escapeHtml(value) {
 function render() {
   const body = document.getElementById("tableBody");
   body.innerHTML = "";
+
   const today = new Date();
-  today.setHours(0,0,0,0);
+  today.setHours(0, 0, 0, 0);
 
   loops.forEach((loop, index) => {
     const next = calculateNext(loop.lastChange, loop.interval);
     const days = dateDiff(today, next);
+
     let status, css;
     if (days < 0) { status = `${Math.abs(days)} days overdue`; css = "overdue"; }
     else if (days === 0) { status = "Change today"; css = "soon"; }
@@ -207,34 +162,40 @@ function render() {
       <td><input type="number" min="1" value="${Number(loop.interval) || 30}" style="width:70px" onchange="updateInterval(${index}, this.value)"> days</td>
       <td>${formatDate(next)}</td>
       <td class="${css}">${status}</td>
-      <td><button onclick="changedToday(${index})">Changed today</button> <button onclick="removeLoop(${index})">×</button></td>`;
+      <td><button onclick="changedToday(${index})">Changed today</button></td>`;
     body.appendChild(row);
   });
 }
 
 function markEdited() {
   writeLocal();
-  setStatus(sharedReady ? "Unsaved changes — click Save for everyone." : "Saved locally only — shared storage not configured.", "warn");
+  setStatus("Local changes saved in this browser only. Edit data.json in GitHub to update everyone.", "warn");
 }
 
-function updateName(index, value) { loops[index].name = value; markEdited(); }
-function updateDate(index, value) { loops[index].lastChange = value; markEdited(); render(); }
-function updateInterval(index, value) { loops[index].interval = Math.max(1, Number(value) || 1); markEdited(); render(); }
-function changedToday(index) { loops[index].lastChange = todayISO(); markEdited(); render(); }
-function addLoop() { loops.push({ name: `Loop ${loops.length + 1}`, lastChange: todayISO(), interval: 30 }); markEdited(); render(); }
-function removeLoop(index) { loops.splice(index, 1); markEdited(); render(); }
+function updateName(index, value) {
+  loops[index].name = value;
+  markEdited();
+}
 
-window.saveShared = saveShared;
-window.loadShared = loadShared;
-window.updateName = updateName;
-window.updateDate = updateDate;
-window.updateInterval = updateInterval;
-window.changedToday = changedToday;
-window.addLoop = addLoop;
-window.removeLoop = removeLoop;
+function updateDate(index, value) {
+  loops[index].lastChange = value;
+  markEdited();
+  render();
+}
 
-render();
-initShared();
+function updateInterval(index, value) {
+  loops[index].interval = Math.max(1, Number(value) || 1);
+  markEdited();
+  render();
+}
+
+function changedToday(index) {
+  loops[index].lastChange = todayISO();
+  markEdited();
+  render();
+}
+
+loadShared();
 setInterval(render, 60 * 60 * 1000);
 </script>
 </body>
