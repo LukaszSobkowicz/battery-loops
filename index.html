@@ -33,15 +33,15 @@
 <div class="controls">
   <button onclick="addLoop()">+ Add loop</button>
   <button class="primary" onclick="publishChanges()">Publish changes</button>
-  <button onclick="reloadShared()">Reload shared data</button>
-  <button onclick="resetLocalChanges()">Discard local changes</button>
+  <button onclick="loadShared()">Reload from GitHub</button>
 </div>
 
-<div class="editor">
+<div class="editor" id="editorBox">
   <label for="githubToken"><strong>Editor token:</strong></label>
-  <input id="githubToken" type="password" autocomplete="off" placeholder="Paste fine-grained GitHub token here">
-  <button onclick="rememberToken()">Use token</button>
+  <input id="githubToken" type="password" autocomplete="off" placeholder="Paste token once on this device">
+  <button onclick="saveToken()">Remember token</button>
   <button onclick="forgetToken()">Forget token</button>
+  <span id="tokenState"></span>
 </div>
 
 <table>
@@ -59,18 +59,15 @@
 </table>
 
 <p class="note">
-  Everyone loads the shared schedule from <strong>data.json</strong>. Editors can add, remove, or edit loops here and click <strong>Publish changes</strong> to commit the new JSON directly to GitHub. The GitHub token is kept only in this browser session and is never written into the repository.
+  The shared schedule is loaded from <strong>data.json</strong> every time this page opens. Edit it here, then click <strong>Publish changes</strong>. The editor token can be remembered only in this browser/device; it is never written to GitHub or the public page source.
 </p>
 
 <script>
-const LOCAL_KEY = "batteryLoopsLocal";
-const TOKEN_KEY = "batteryLoopsGithubToken";
+const TOKEN_KEY = "batteryLoopsGithubTokenPersistent";
 const OWNER = "LukaszSobkowicz";
 const REPO = "battery-loops";
 const BRANCH = "main";
 const DATA_PATH = "data.json";
-
-let sharedLoops = [];
 let loops = [];
 
 function todayISO() {
@@ -87,49 +84,46 @@ function setStatus(text, kind = "warn") {
   el.className = `statusbar ${kind}`;
 }
 
-function readLocal() {
-  try { return JSON.parse(localStorage.getItem(LOCAL_KEY)); }
-  catch { return null; }
+function updateTokenState() {
+  const saved = localStorage.getItem(TOKEN_KEY);
+  document.getElementById("tokenState").textContent = saved ? "Token remembered on this device." : "No token remembered.";
 }
 
-function writeLocal() {
-  localStorage.setItem(LOCAL_KEY, JSON.stringify(loops));
-}
-
-function rememberToken() {
+function saveToken() {
   const input = document.getElementById("githubToken");
   const token = input.value.trim();
   if (!token) {
-    setStatus("Paste the GitHub token into the Editor token field first.", "error");
+    setStatus("Paste your GitHub token first.", "error");
     input.focus();
     return;
   }
-  sessionStorage.setItem(TOKEN_KEY, token);
+  localStorage.setItem(TOKEN_KEY, token);
   input.value = "";
-  setStatus("Editor token stored for this browser session.", "ok");
+  updateTokenState();
+  setStatus("Editor token remembered on this device.", "ok");
 }
 
 function getToken() {
-  const saved = sessionStorage.getItem(TOKEN_KEY);
+  const saved = localStorage.getItem(TOKEN_KEY);
   if (saved) return saved;
-
   const input = document.getElementById("githubToken");
   const token = input.value.trim();
   if (token) {
-    sessionStorage.setItem(TOKEN_KEY, token);
+    localStorage.setItem(TOKEN_KEY, token);
     input.value = "";
+    updateTokenState();
     return token;
   }
-
-  setStatus("Editor token required. Paste it into the Editor token field, then click Publish changes again.", "error");
+  setStatus("Editor token required. Paste it once, then publish again.", "error");
   input.focus();
   return null;
 }
 
 function forgetToken() {
-  sessionStorage.removeItem(TOKEN_KEY);
+  localStorage.removeItem(TOKEN_KEY);
   document.getElementById("githubToken").value = "";
-  setStatus("Editor token removed from this browser session.", "ok");
+  updateTokenState();
+  setStatus("Editor token forgotten on this device.", "ok");
 }
 
 async function loadShared() {
@@ -139,35 +133,13 @@ async function loadShared() {
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
     if (!Array.isArray(data)) throw new Error("data.json must contain a JSON array");
-
-    sharedLoops = data;
-    const local = readLocal();
-    loops = Array.isArray(local) ? local : structuredClone(sharedLoops);
+    loops = structuredClone(data);
     render();
-
-    setStatus(
-      local ? "Shared schedule loaded; this browser has unpublished local changes." : "Shared schedule loaded.",
-      local ? "warn" : "ok"
-    );
+    setStatus("Shared schedule loaded from GitHub.", "ok");
   } catch (err) {
     console.error(err);
-    const local = readLocal();
-    loops = Array.isArray(local) ? local : [];
-    render();
-    setStatus("Could not load data.json. Showing local data if available.", "error");
+    setStatus("Could not load data.json.", "error");
   }
-}
-
-async function reloadShared() {
-  localStorage.removeItem(LOCAL_KEY);
-  await loadShared();
-}
-
-async function resetLocalChanges() {
-  localStorage.removeItem(LOCAL_KEY);
-  loops = structuredClone(sharedLoops);
-  render();
-  setStatus("Local changes discarded. Showing shared schedule.", "ok");
 }
 
 function encodeBase64Utf8(text) {
@@ -177,9 +149,7 @@ function encodeBase64Utf8(text) {
   return btoa(binary);
 }
 
-async function githubRequest(url, options = {}) {
-  const token = getToken();
-  if (!token) throw new Error("No GitHub token provided.");
+async function githubFetch(url, token, options = {}) {
   const headers = {
     "Accept": "application/vnd.github+json",
     "Authorization": `Bearer ${token}`,
@@ -190,25 +160,24 @@ async function githubRequest(url, options = {}) {
 }
 
 async function publishChanges() {
+  const token = getToken();
+  if (!token) return;
+
   try {
-    const token = getToken();
-    if (!token) return;
-
-    setStatus("Publishing changes to GitHub…", "warn");
-
+    setStatus("Publishing changes…", "warn");
     const apiUrl = `https://api.github.com/repos/${OWNER}/${REPO}/contents/${DATA_PATH}?ref=${BRANCH}`;
-    const current = await githubRequest(apiUrl);
+    const current = await githubFetch(apiUrl, token);
 
     if (current.status === 401 || current.status === 403) {
-      sessionStorage.removeItem(TOKEN_KEY);
-      throw new Error("GitHub rejected the token. Use a fine-grained token with Contents: Read and write access to this repository.");
+      localStorage.removeItem(TOKEN_KEY);
+      updateTokenState();
+      throw new Error("GitHub rejected the token. Create a fine-grained token with Contents: Read and write for this repository.");
     }
     if (!current.ok) throw new Error(`Could not read data.json from GitHub (HTTP ${current.status}).`);
 
     const currentFile = await current.json();
     const jsonText = JSON.stringify(loops, null, 2) + "\n";
-
-    const update = await githubRequest(`https://api.github.com/repos/${OWNER}/${REPO}/contents/${DATA_PATH}`, {
+    const update = await githubFetch(`https://api.github.com/repos/${OWNER}/${REPO}/contents/${DATA_PATH}`, token, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -220,26 +189,23 @@ async function publishChanges() {
     });
 
     if (update.status === 401 || update.status === 403) {
-      sessionStorage.removeItem(TOKEN_KEY);
-      throw new Error("GitHub rejected the write. Check that the token has Contents: Read and write permission for this repository.");
+      localStorage.removeItem(TOKEN_KEY);
+      updateTokenState();
+      throw new Error("GitHub rejected the write. Check Contents: Read and write permission.");
     }
     if (!update.ok) {
       const detail = await update.text();
       throw new Error(`GitHub save failed (HTTP ${update.status}). ${detail}`);
     }
 
-    sharedLoops = structuredClone(loops);
-    localStorage.removeItem(LOCAL_KEY);
-    setStatus("Published successfully. Other users will see the new schedule after GitHub Pages refreshes.", "ok");
+    setStatus("Published successfully. Shared data.json is updated.", "ok");
   } catch (err) {
     console.error(err);
     setStatus(err.message || "Could not publish changes.", "error");
   }
 }
 
-function dateDiff(date1, date2) {
-  return Math.ceil((date2 - date1) / 86400000);
-}
+function dateDiff(date1, date2) { return Math.ceil((date2 - date1) / 86400000); }
 
 function calculateNext(lastChange, interval) {
   const date = new Date(lastChange + "T00:00:00");
@@ -261,14 +227,12 @@ function escapeHtml(value) {
 function render() {
   const body = document.getElementById("tableBody");
   body.innerHTML = "";
-
   const today = new Date();
-  today.setHours(0, 0, 0, 0);
+  today.setHours(0,0,0,0);
 
   loops.forEach((loop, index) => {
     const next = calculateNext(loop.lastChange, loop.interval);
     const days = dateDiff(today, next);
-
     let status, css;
     if (days < 0) { status = `${Math.abs(days)} days overdue`; css = "overdue"; }
     else if (days === 0) { status = "Change today"; css = "soon"; }
@@ -282,58 +246,20 @@ function render() {
       <td><input type="number" min="1" value="${Number(loop.interval) || 30}" style="width:70px" onchange="updateInterval(${index}, this.value)"> days</td>
       <td>${formatDate(next)}</td>
       <td class="${css}">${status}</td>
-      <td>
-        <button onclick="changedToday(${index})">Changed today</button>
-        <button onclick="removeLoop(${index})" title="Remove loop">×</button>
-      </td>`;
+      <td><button onclick="changedToday(${index})">Changed today</button> <button onclick="removeLoop(${index})" title="Remove loop">×</button></td>`;
     body.appendChild(row);
   });
 }
 
-function markEdited() {
-  writeLocal();
-  setStatus("Unpublished changes — click Publish changes.", "warn");
-}
+function markEdited() { setStatus("Unpublished changes — click Publish changes.", "warn"); }
+function updateName(index, value) { loops[index].name = value; markEdited(); }
+function updateDate(index, value) { loops[index].lastChange = value; markEdited(); render(); }
+function updateInterval(index, value) { loops[index].interval = Math.max(1, Number(value) || 1); markEdited(); render(); }
+function changedToday(index) { loops[index].lastChange = todayISO(); markEdited(); render(); }
+function addLoop() { loops.push({ name: `Loop ${loops.length + 1}`, lastChange: todayISO(), interval: 30 }); markEdited(); render(); }
+function removeLoop(index) { loops.splice(index, 1); markEdited(); render(); }
 
-function updateName(index, value) {
-  loops[index].name = value;
-  markEdited();
-}
-
-function updateDate(index, value) {
-  loops[index].lastChange = value;
-  markEdited();
-  render();
-}
-
-function updateInterval(index, value) {
-  loops[index].interval = Math.max(1, Number(value) || 1);
-  markEdited();
-  render();
-}
-
-function changedToday(index) {
-  loops[index].lastChange = todayISO();
-  markEdited();
-  render();
-}
-
-function addLoop() {
-  loops.push({
-    name: `Loop ${loops.length + 1}`,
-    lastChange: todayISO(),
-    interval: 30
-  });
-  markEdited();
-  render();
-}
-
-function removeLoop(index) {
-  loops.splice(index, 1);
-  markEdited();
-  render();
-}
-
+updateTokenState();
 loadShared();
 setInterval(render, 60 * 60 * 1000);
 </script>
