@@ -2,26 +2,36 @@
   {
     "name": "LLS 20",
     "lastChange": "2026-08-31",
-    "interval": 45
+    "interval": 45,
+    "x2177": 6599806.3,
+    "y2177": 5738723.75
   },
   {
     "name": "LLS 21",
     "lastChange": "2026-08-31",
-    "interval": 45
+    "interval": 45,
+    "x2177": 6599777.99,
+    "y2177": 5738646.81
   },
   {
     "name": "LLS 22",
     "lastChange": "2026-08-31",
-    "interval": 45
+    "interval": 45,
+    "x2177": 6599820.72,
+    "y2177": 5738685.3
   },
   {
     "name": "LLS 23",
     "lastChange": "2026-09-02",
-    "interval": 45
+    "interval": 45,
+    "x2177": 6599836.2,
+    "y2177": 5738689.93
   },
   {
     "name": "LLS 24",
     "lastChange": "2026-09-03",
-    "interval": 45
+    "interval": 45,
+    "x2177": 6599779.09,
+    "y2177": 5738632.76
   }
 ]
