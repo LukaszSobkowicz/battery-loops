@@ -12,29 +12,36 @@
   .statusbar.ok { color: #167c2b; }
   .statusbar.warn { color: #9a6700; }
   .statusbar.error { color: #b42318; }
+
   .tabs { display: flex; gap: 6px; margin-bottom: 14px; }
   .tabButton { padding: 9px 16px; font-weight: 700; }
   .tabButton.active { background: #222; color: #fff; border-color: #222; }
   .tabPanel { display: none; }
   .tabPanel.active { display: block; }
+
   .controls { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
   .editor { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 15px; padding: 10px; background: #fff; border: 1px solid #ddd; border-radius: 8px; }
   .editor input { min-width: 280px; padding: 8px; }
+
   button { padding: 8px 12px; cursor: pointer; border: 1px solid #bbb; border-radius: 6px; background: white; }
   button.primary { font-weight: 700; }
   button.sortButton { border: 0; background: transparent; padding: 0; font: inherit; font-weight: 700; }
   button.sortButton:hover { text-decoration: underline; }
   button.orderButton { padding: 5px 8px; }
+
   table { width: 100%; border-collapse: collapse; background: white; }
   th, td { padding: 10px; border-bottom: 1px solid #ddd; text-align: left; vertical-align: middle; }
   th { background: #eee; }
   input { max-width: 100%; box-sizing: border-box; }
+
   .coordInputs { display: grid; grid-template-columns: auto minmax(110px, 1fr); gap: 4px 6px; align-items: center; min-width: 185px; }
   .coordInputs label { font-size: 12px; font-weight: 700; }
   .coordInputs input { width: 130px; }
+
   .okText { color: green; font-weight: bold; }
   .soon { color: #b36b00; font-weight: bold; }
   .overdue { color: red; font-weight: bold; }
+
   #map { width: 100%; height: calc(100vh - 160px); min-height: 500px; border: 1px solid #ccc; border-radius: 8px; background: #ddd; }
   .mapLegend { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 10px; font-size: 13px; }
   .legendItem { display: flex; align-items: center; gap: 5px; }
@@ -42,13 +49,24 @@
   .legendDot.ok { background: #16823a; }
   .legendDot.soon { background: #d88900; }
   .legendDot.overdue { background: #cc2323; }
-  .loopMapIcon { background: transparent; border: 0; }
-  .mapLabel { display: inline-flex; flex-direction: column; align-items: center; justify-content: center; min-width: 86px; max-width: 150px; padding: 5px 8px; border-radius: 8px; border: 2px solid #fff; box-shadow: 0 1px 5px rgba(0,0,0,.45); color: #fff; font-size: 12px; line-height: 1.15; text-align: center; white-space: nowrap; transform: translate(-50%, -50%); }
-  .mapLabel strong { font-size: 13px; }
-  .mapLabel.ok { background: #16823a; }
-  .mapLabel.soon { background: #d88900; }
-  .mapLabel.overdue { background: #cc2323; }
+
+  .leaflet-tooltip.loopTooltip {
+    border: 0;
+    border-radius: 7px;
+    color: #fff;
+    box-shadow: 0 1px 5px rgba(0,0,0,.4);
+    padding: 5px 8px;
+    font-size: 12px;
+    line-height: 1.15;
+    white-space: nowrap;
+  }
+  .leaflet-tooltip.loopTooltip.ok { background: #16823a; }
+  .leaflet-tooltip.loopTooltip.soon { background: #d88900; }
+  .leaflet-tooltip.loopTooltip.overdue { background: #cc2323; }
+  .leaflet-tooltip.loopTooltip::before { display: none; }
+  .loopTooltip strong { font-size: 13px; }
   .popupGrid { display: grid; grid-template-columns: auto auto; gap: 3px 10px; }
+
   @media (max-width: 900px) {
     body { margin: 10px; }
     #map { height: 70vh; min-height: 420px; }
@@ -115,12 +133,15 @@ const REPO = "battery-loops";
 const BRANCH = "main";
 const DATA_PATH = "data.json";
 const DEFAULT_INTERVAL = 45;
+
 let loops = [];
 let sortState = { key: null, direction: 1 };
 let map = null;
 let markerLayer = null;
-let activeTab = "table";
 
+// ETRS89 / Poland CS2000 zone 6 (EPSG:2177).
+// Proj4 projected coordinates are [easting, northing].
+// In this table X is the ~6.5M easting and Y is the ~5.7M northing.
 proj4.defs("EPSG:2177", "+proj=tmerc +lat_0=0 +lon_0=18 +k=0.999923 +x_0=6500000 +y_0=0 +ellps=GRS80 +units=m +no_defs +type=crs");
 
 function todayISO() {
@@ -159,6 +180,7 @@ function saveToken() {
 function getToken() {
   const saved = localStorage.getItem(TOKEN_KEY);
   if (saved) return saved;
+
   const input = document.getElementById("githubToken");
   const token = input.value.trim();
   if (token) {
@@ -167,6 +189,7 @@ function getToken() {
     updateTokenState();
     return token;
   }
+
   setStatus("Editor token required. Paste it once, then publish again.", "error");
   input.focus();
   return null;
@@ -180,7 +203,6 @@ function forgetToken() {
 }
 
 function showTab(tab) {
-  activeTab = tab;
   document.getElementById("tableTab").classList.toggle("active", tab === "table");
   document.getElementById("mapTab").classList.toggle("active", tab === "map");
   document.getElementById("tableTabButton").classList.toggle("active", tab === "table");
@@ -200,8 +222,10 @@ async function loadShared() {
     setStatus("Loading shared schedule…", "warn");
     const response = await fetch(`data.json?v=${Date.now()}`, { cache: "no-store" });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
     const data = await response.json();
     if (!Array.isArray(data)) throw new Error("data.json must contain a JSON array");
+
     loops = structuredClone(data);
     sortState = { key: null, direction: 1 };
     render();
@@ -235,6 +259,7 @@ async function publishChanges() {
 
   try {
     setStatus("Publishing changes…", "warn");
+
     const apiUrl = `https://api.github.com/repos/${OWNER}/${REPO}/contents/${DATA_PATH}?ref=${BRANCH}`;
     const current = await githubFetch(apiUrl, token);
 
@@ -247,6 +272,7 @@ async function publishChanges() {
 
     const currentFile = await current.json();
     const jsonText = JSON.stringify(loops, null, 2) + "\n";
+
     const update = await githubFetch(`https://api.github.com/repos/${OWNER}/${REPO}/contents/${DATA_PATH}`, token, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -275,7 +301,9 @@ async function publishChanges() {
   }
 }
 
-function dateDiff(date1, date2) { return Math.ceil((date2 - date1) / 86400000); }
+function dateDiff(date1, date2) {
+  return Math.ceil((date2 - date1) / 86400000);
+}
 
 function calculateNext(lastChange, interval) {
   const date = new Date(lastChange + "T00:00:00");
@@ -291,7 +319,13 @@ function formatDate(date) {
 }
 
 function escapeHtml(value) {
-  return String(value).replace(/[&<>'"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[c]));
+  return String(value).replace(/[&<>'"]/g, c => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    "'": "&#39;",
+    '"': "&quot;"
+  }[c]));
 }
 
 function getLoopStatus(loop) {
@@ -375,6 +409,7 @@ function render() {
         <button onclick="changedToday(${index})">Changed today</button>
         <button onclick="removeLoop(${index})" title="Remove loop">×</button>
       </td>`;
+
     body.appendChild(row);
   });
 
@@ -388,24 +423,36 @@ function hasCoordinates(loop) {
 }
 
 function toLatLng2177(loop) {
-  // Polish surveying notation: X = northing, Y = easting.
-  // Proj4 projected-coordinate order is [easting, northing], therefore pass [Y, X].
-  const result = proj4("EPSG:2177", "EPSG:4326", [Number(loop.y2177), Number(loop.x2177)]);
+  // EPSG:2177 / CS2000 zone 6 values used here:
+  // X = easting (~6,500,000), Y = northing (~5,700,000).
+  // Proj4 expects [easting, northing], so the correct order is [X, Y].
+  const x = Number(loop.x2177);
+  const y = Number(loop.y2177);
+  const result = proj4("EPSG:2177", "EPSG:4326", [x, y]);
   return [result[1], result[0]];
 }
 
 function initMap() {
   if (map) return;
+
   map = L.map("map", { zoomControl: true }).setView([52.0, 19.0], 6);
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
     maxZoom: 19,
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
   }).addTo(map);
+
   markerLayer = L.layerGroup().addTo(map);
+}
+
+function markerColor(css) {
+  if (css === "overdue") return "#cc2323";
+  if (css === "soon") return "#d88900";
+  return "#16823a";
 }
 
 function updateMap() {
   if (!map || !markerLayer) return;
+
   markerLayer.clearLayers();
   const bounds = [];
 
@@ -415,18 +462,33 @@ function updateMap() {
     try {
       const latLng = toLatLng2177(loop);
       if (!Number.isFinite(latLng[0]) || !Number.isFinite(latLng[1])) return;
+
       const status = getLoopStatus(loop);
       const labelName = escapeHtml(loop.name || "Unnamed loop");
       const labelStatus = escapeHtml(status.text);
+      const color = markerColor(status.css);
 
-      const icon = L.divIcon({
-        className: "loopMapIcon",
-        html: `<div class="mapLabel ${status.css}"><strong>${labelName}</strong><span>${labelStatus}</span></div>`,
-        iconSize: [1, 1],
-        iconAnchor: [0, 0]
-      });
+      // Small circle is the exact datalogger position.
+      const marker = L.circleMarker(latLng, {
+        radius: 7,
+        color: "#ffffff",
+        weight: 2,
+        fillColor: color,
+        fillOpacity: 1
+      }).addTo(markerLayer);
 
-      const marker = L.marker(latLng, { icon }).addTo(markerLayer);
+      // Name/status stays beside the precise point instead of covering it.
+      marker.bindTooltip(
+        `<strong>${labelName}</strong><br>${labelStatus}`,
+        {
+          permanent: true,
+          direction: "right",
+          offset: [10, 0],
+          opacity: 1,
+          className: `loopTooltip ${status.css}`
+        }
+      );
+
       marker.bindPopup(`
         <strong>${labelName}</strong><br>
         <div class="popupGrid">
@@ -435,35 +497,78 @@ function updateMap() {
           <span>Next change:</span><span>${formatDate(status.next)}</span>
           <span>X:</span><span>${escapeHtml(loop.x2177)}</span>
           <span>Y:</span><span>${escapeHtml(loop.y2177)}</span>
+          <span>Latitude:</span><span>${latLng[0].toFixed(6)}</span>
+          <span>Longitude:</span><span>${latLng[1].toFixed(6)}</span>
         </div>`);
+
       bounds.push(latLng);
     } catch (err) {
       console.error("Could not plot loop", loop.name, err);
     }
   });
 
-  if (bounds.length === 1) map.setView(bounds[0], 16);
-  else if (bounds.length > 1) map.fitBounds(bounds, { padding: [50, 50], maxZoom: 17 });
-  else map.setView([52.0, 19.0], 6);
+  if (bounds.length === 1) {
+    map.setView(bounds[0], 17);
+  } else if (bounds.length > 1) {
+    map.fitBounds(bounds, { padding: [60, 100], maxZoom: 17 });
+  } else {
+    map.setView([52.0, 19.0], 6);
+  }
 }
 
-function markEdited() { setStatus("Unpublished changes — click Publish changes.", "warn"); }
-function updateName(index, value) { loops[index].name = value; markEdited(); if (map) updateMap(); }
-function updateDate(index, value) { loops[index].lastChange = value; markEdited(); render(); }
-function updateInterval(index, value) { loops[index].interval = Math.max(1, Number(value) || 1); markEdited(); render(); }
+function markEdited() {
+  setStatus("Unpublished changes — click Publish changes.", "warn");
+}
+
+function updateName(index, value) {
+  loops[index].name = value;
+  markEdited();
+  if (map) updateMap();
+}
+
+function updateDate(index, value) {
+  loops[index].lastChange = value;
+  markEdited();
+  render();
+}
+
+function updateInterval(index, value) {
+  loops[index].interval = Math.max(1, Number(value) || 1);
+  markEdited();
+  render();
+}
+
 function updateCoordinate(index, key, value) {
   loops[index][key] = value.trim() === "" ? "" : Number(value);
   markEdited();
   if (map) updateMap();
 }
-function changedToday(index) { loops[index].lastChange = todayISO(); markEdited(); render(); }
+
+function changedToday(index) {
+  loops[index].lastChange = todayISO();
+  markEdited();
+  render();
+}
+
 function addLoop() {
-  loops.push({ name: `Loop ${loops.length + 1}`, lastChange: todayISO(), interval: DEFAULT_INTERVAL, x2177: "", y2177: "" });
+  loops.push({
+    name: `Loop ${loops.length + 1}`,
+    lastChange: todayISO(),
+    interval: DEFAULT_INTERVAL,
+    x2177: "",
+    y2177: ""
+  });
   sortState = { key: null, direction: 1 };
   markEdited();
   render();
 }
-function removeLoop(index) { loops.splice(index, 1); sortState = { key: null, direction: 1 }; markEdited(); render(); }
+
+function removeLoop(index) {
+  loops.splice(index, 1);
+  sortState = { key: null, direction: 1 };
+  markEdited();
+  render();
+}
 
 updateTokenState();
 loadShared();
