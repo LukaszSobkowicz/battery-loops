@@ -3,279 +3,239 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-
 <title>Battery Schedule</title>
-
 <style>
-    body {
-        font-family: system-ui, sans-serif;
-        margin: 20px;
-        background: #f5f5f5;
-    }
-
-    h1 {
-        font-size: 22px;
-    }
-
-    table {
-        width: 100%;
-        border-collapse: collapse;
-        background: white;
-    }
-
-    th, td {
-        padding: 10px;
-        border-bottom: 1px solid #ddd;
-        text-align: left;
-    }
-
-    th {
-        background: #eee;
-    }
-
-    button {
-        padding: 6px 10px;
-        cursor: pointer;
-    }
-
-    .ok {
-        color: green;
-        font-weight: bold;
-    }
-
-    .soon {
-        color: orange;
-        font-weight: bold;
-    }
-
-    .overdue {
-        color: red;
-        font-weight: bold;
-    }
-
-    .controls {
-        margin-bottom: 15px;
-    }
+  body { font-family: system-ui, sans-serif; margin: 20px; background: #f5f5f5; color: #222; }
+  h1 { font-size: 22px; margin-bottom: 8px; }
+  .statusbar { margin: 0 0 14px; font-size: 14px; }
+  .statusbar.ok { color: #167c2b; }
+  .statusbar.warn { color: #9a6700; }
+  .statusbar.error { color: #b42318; }
+  .controls { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 15px; }
+  button { padding: 8px 12px; cursor: pointer; border: 1px solid #bbb; border-radius: 6px; background: white; }
+  button.primary { font-weight: 700; }
+  table { width: 100%; border-collapse: collapse; background: white; }
+  th, td { padding: 10px; border-bottom: 1px solid #ddd; text-align: left; vertical-align: middle; }
+  th { background: #eee; }
+  input { max-width: 100%; box-sizing: border-box; }
+  .okText { color: green; font-weight: bold; }
+  .soon { color: #b36b00; font-weight: bold; }
+  .overdue { color: red; font-weight: bold; }
+  .note { margin-top: 14px; font-size: 13px; color: #555; }
 </style>
 </head>
-
 <body>
-
 <h1>Battery Replacement Schedule</h1>
+<div id="connectionStatus" class="statusbar warn">Loading…</div>
 
 <div class="controls">
-    <button onclick="addLoop()">+ Add loop</button>
+  <button onclick="addLoop()">+ Add loop</button>
+  <button class="primary" onclick="saveShared()">Save for everyone</button>
+  <button onclick="loadShared()">Reload shared data</button>
 </div>
 
 <table>
-    <thead>
-        <tr>
-            <th>Loop</th>
-            <th>Last change</th>
-            <th>Interval</th>
-            <th>Next change</th>
-            <th>Status</th>
-            <th></th>
-        </tr>
-    </thead>
-
-    <tbody id="tableBody"></tbody>
+  <thead>
+    <tr>
+      <th>Loop</th>
+      <th>Last change</th>
+      <th>Interval</th>
+      <th>Next change</th>
+      <th>Status</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody id="tableBody"></tbody>
 </table>
 
-<script>
+<p class="note">Changes are only shared after clicking <strong>Save for everyone</strong>. If shared storage is unavailable, this page falls back to this browser's local storage.</p>
 
-let loops = JSON.parse(localStorage.getItem("batteryLoops")) || [
-    {
-        name: "Loop 1",
-        lastChange: new Date().toISOString().slice(0,10),
-        interval: 30
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/12.2.1/firebase-app.js";
+import { getDatabase, ref, get, set } from "https://www.gstatic.com/firebasejs/12.2.1/firebase-database.js";
+
+// Paste your Firebase web-app configuration here.
+// These values are intended to be present in client-side Firebase apps;
+// access control must be enforced with Firebase Realtime Database Rules.
+const firebaseConfig = {
+  apiKey: "PASTE_API_KEY_HERE",
+  authDomain: "PASTE_PROJECT_ID.firebaseapp.com",
+  databaseURL: "https://PASTE_PROJECT_ID-default-rtdb.europe-west1.firebasedatabase.app",
+  projectId: "PASTE_PROJECT_ID",
+  appId: "PASTE_APP_ID_HERE"
+};
+
+const SHARED_PATH = "batteryLoops";
+const LOCAL_KEY = "batteryLoops";
+
+let db = null;
+let sharedReady = false;
+let loops = readLocal() || [defaultLoop()];
+
+function defaultLoop() {
+  return { name: "Loop 1", lastChange: todayISO(), interval: 30 };
+}
+
+function todayISO() {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function readLocal() {
+  try { return JSON.parse(localStorage.getItem(LOCAL_KEY)); }
+  catch { return null; }
+}
+
+function writeLocal() {
+  localStorage.setItem(LOCAL_KEY, JSON.stringify(loops));
+}
+
+function setStatus(text, kind = "warn") {
+  const el = document.getElementById("connectionStatus");
+  el.textContent = text;
+  el.className = `statusbar ${kind}`;
+}
+
+function firebaseConfigured() {
+  return !Object.values(firebaseConfig).some(v => String(v).includes("PASTE_"));
+}
+
+async function initShared() {
+  if (!firebaseConfigured()) {
+    setStatus("Shared storage is not configured yet — using local storage only.", "warn");
+    render();
+    return;
+  }
+  try {
+    const app = initializeApp(firebaseConfig);
+    db = getDatabase(app);
+    sharedReady = true;
+    await loadShared();
+  } catch (err) {
+    console.error(err);
+    setStatus("Could not connect to shared storage — using local storage.", "error");
+    render();
+  }
+}
+
+async function loadShared() {
+  if (!sharedReady || !db) {
+    setStatus("Shared storage is not configured — showing local data.", "warn");
+    loops = readLocal() || loops;
+    render();
+    return;
+  }
+  try {
+    setStatus("Loading shared schedule…", "warn");
+    const snap = await get(ref(db, SHARED_PATH));
+    if (snap.exists()) {
+      const value = snap.val();
+      loops = Array.isArray(value) ? value.filter(Boolean) : Object.values(value || {});
+    } else {
+      loops = readLocal() || [defaultLoop()];
     }
-];
+    writeLocal();
+    render();
+    setStatus("Shared schedule loaded.", "ok");
+  } catch (err) {
+    console.error(err);
+    setStatus("Could not load shared data — showing local copy.", "error");
+    loops = readLocal() || loops;
+    render();
+  }
+}
 
-function save() {
-    localStorage.setItem("batteryLoops", JSON.stringify(loops));
+async function saveShared() {
+  writeLocal();
+  if (!sharedReady || !db) {
+    setStatus("Saved only on this device. Configure Firebase to share changes.", "warn");
+    return;
+  }
+  try {
+    setStatus("Saving shared schedule…", "warn");
+    await set(ref(db, SHARED_PATH), loops);
+    setStatus("Saved. Other users will see these dates when they reload.", "ok");
+  } catch (err) {
+    console.error(err);
+    setStatus("Shared save failed. Your local copy is still saved.", "error");
+  }
 }
 
 function dateDiff(date1, date2) {
-    return Math.ceil(
-        (date2 - date1) / (1000 * 60 * 60 * 24)
-    );
+  return Math.ceil((date2 - date1) / 86400000);
 }
 
 function calculateNext(lastChange, interval) {
-
-    const date = new Date(lastChange + "T00:00:00");
-
-    date.setDate(date.getDate() + Number(interval));
-
-    return date;
+  const date = new Date(lastChange + "T00:00:00");
+  date.setDate(date.getDate() + Number(interval));
+  return date;
 }
 
 function formatDate(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
 
-    return date.toISOString().slice(0,10);
-
+function escapeHtml(value) {
+  return String(value).replace(/[&<>'"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[c]));
 }
 
 function render() {
+  const body = document.getElementById("tableBody");
+  body.innerHTML = "";
+  const today = new Date();
+  today.setHours(0,0,0,0);
 
-    const body = document.getElementById("tableBody");
+  loops.forEach((loop, index) => {
+    const next = calculateNext(loop.lastChange, loop.interval);
+    const days = dateDiff(today, next);
+    let status, css;
+    if (days < 0) { status = `${Math.abs(days)} days overdue`; css = "overdue"; }
+    else if (days === 0) { status = "Change today"; css = "soon"; }
+    else if (days <= 5) { status = `${days} days`; css = "soon"; }
+    else { status = `${days} days`; css = "okText"; }
 
-    body.innerHTML = "";
-
-    const today = new Date();
-    today.setHours(0,0,0,0);
-
-    loops.forEach((loop, index) => {
-
-        const next = calculateNext(
-            loop.lastChange,
-            loop.interval
-        );
-
-        const days = dateDiff(today, next);
-
-        let status;
-        let css;
-
-        if (days < 0) {
-
-            status = `${Math.abs(days)} days overdue`;
-            css = "overdue";
-
-        } else if (days === 0) {
-
-            status = "Change today";
-            css = "soon";
-
-        } else if (days <= 5) {
-
-            status = `${days} days`;
-            css = "soon";
-
-        } else {
-
-            status = `${days} days`;
-            css = "ok";
-
-        }
-
-        const row = document.createElement("tr");
-
-        row.innerHTML = `
-
-            <td>
-                <input
-                    value="${loop.name}"
-                    onchange="updateName(${index}, this.value)">
-            </td>
-
-            <td>
-                <input
-                    type="date"
-                    value="${loop.lastChange}"
-                    onchange="updateDate(${index}, this.value)">
-            </td>
-
-            <td>
-                <input
-                    type="number"
-                    min="1"
-                    value="${loop.interval}"
-                    style="width:60px"
-                    onchange="updateInterval(${index}, this.value)">
-                days
-            </td>
-
-            <td>
-                ${formatDate(next)}
-            </td>
-
-            <td class="${css}">
-                ${status}
-            </td>
-
-            <td>
-                <button onclick="changedToday(${index})">
-                    Changed today
-                </button>
-
-                <button onclick="removeLoop(${index})">
-                    ×
-                </button>
-            </td>
-        `;
-
-        body.appendChild(row);
-
-    });
-
+    const row = document.createElement("tr");
+    row.innerHTML = `
+      <td><input value="${escapeHtml(loop.name)}" onchange="updateName(${index}, this.value)"></td>
+      <td><input type="date" value="${escapeHtml(loop.lastChange)}" onchange="updateDate(${index}, this.value)"></td>
+      <td><input type="number" min="1" value="${Number(loop.interval) || 30}" style="width:70px" onchange="updateInterval(${index}, this.value)"> days</td>
+      <td>${formatDate(next)}</td>
+      <td class="${css}">${status}</td>
+      <td><button onclick="changedToday(${index})">Changed today</button> <button onclick="removeLoop(${index})">×</button></td>`;
+    body.appendChild(row);
+  });
 }
 
-function updateName(index, value) {
-
-    loops[index].name = value;
-
-    save();
-
+function markEdited() {
+  writeLocal();
+  setStatus(sharedReady ? "Unsaved changes — click Save for everyone." : "Saved locally only — shared storage not configured.", "warn");
 }
 
-function updateDate(index, value) {
+function updateName(index, value) { loops[index].name = value; markEdited(); }
+function updateDate(index, value) { loops[index].lastChange = value; markEdited(); render(); }
+function updateInterval(index, value) { loops[index].interval = Math.max(1, Number(value) || 1); markEdited(); render(); }
+function changedToday(index) { loops[index].lastChange = todayISO(); markEdited(); render(); }
+function addLoop() { loops.push({ name: `Loop ${loops.length + 1}`, lastChange: todayISO(), interval: 30 }); markEdited(); render(); }
+function removeLoop(index) { loops.splice(index, 1); markEdited(); render(); }
 
-    loops[index].lastChange = value;
-
-    save();
-    render();
-
-}
-
-function updateInterval(index, value) {
-
-    loops[index].interval = Number(value);
-
-    save();
-    render();
-
-}
-
-function changedToday(index) {
-
-    loops[index].lastChange =
-        new Date().toISOString().slice(0,10);
-
-    save();
-    render();
-
-}
-
-function addLoop() {
-
-    loops.push({
-        name: `Loop ${loops.length + 1}`,
-        lastChange: new Date().toISOString().slice(0,10),
-        interval: 30
-    });
-
-    save();
-    render();
-
-}
-
-function removeLoop(index) {
-
-    loops.splice(index, 1);
-
-    save();
-    render();
-
-}
+window.saveShared = saveShared;
+window.loadShared = loadShared;
+window.updateName = updateName;
+window.updateDate = updateDate;
+window.updateInterval = updateInterval;
+window.changedToday = changedToday;
+window.addLoop = addLoop;
+window.removeLoop = removeLoop;
 
 render();
-
-/* Refresh status every hour */
+initShared();
 setInterval(render, 60 * 60 * 1000);
-
 </script>
-
 </body>
 </html>
