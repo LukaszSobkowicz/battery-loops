@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Battery Schedule</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <style>
   body { font-family: system-ui, sans-serif; margin: 20px; background: #f5f5f5; color: #222; }
   h1 { font-size: 22px; margin-bottom: 8px; }
@@ -11,6 +12,11 @@
   .statusbar.ok { color: #167c2b; }
   .statusbar.warn { color: #9a6700; }
   .statusbar.error { color: #b42318; }
+  .tabs { display: flex; gap: 6px; margin-bottom: 14px; }
+  .tabButton { padding: 9px 16px; font-weight: 700; }
+  .tabButton.active { background: #222; color: #fff; border-color: #222; }
+  .tabPanel { display: none; }
+  .tabPanel.active { display: block; }
   .controls { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
   .editor { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 15px; padding: 10px; background: #fff; border: 1px solid #ddd; border-radius: 8px; }
   .editor input { min-width: 280px; padding: 8px; }
@@ -23,43 +29,85 @@
   th, td { padding: 10px; border-bottom: 1px solid #ddd; text-align: left; vertical-align: middle; }
   th { background: #eee; }
   input { max-width: 100%; box-sizing: border-box; }
+  .coordInputs { display: grid; grid-template-columns: auto minmax(110px, 1fr); gap: 4px 6px; align-items: center; min-width: 185px; }
+  .coordInputs label { font-size: 12px; font-weight: 700; }
+  .coordInputs input { width: 130px; }
   .okText { color: green; font-weight: bold; }
   .soon { color: #b36b00; font-weight: bold; }
   .overdue { color: red; font-weight: bold; }
+  #map { width: 100%; height: calc(100vh - 160px); min-height: 500px; border: 1px solid #ccc; border-radius: 8px; background: #ddd; }
+  .mapLegend { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 10px; font-size: 13px; }
+  .legendItem { display: flex; align-items: center; gap: 5px; }
+  .legendDot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
+  .legendDot.ok { background: #16823a; }
+  .legendDot.soon { background: #d88900; }
+  .legendDot.overdue { background: #cc2323; }
+  .loopMapIcon { background: transparent; border: 0; }
+  .mapLabel { display: inline-flex; flex-direction: column; align-items: center; justify-content: center; min-width: 86px; max-width: 150px; padding: 5px 8px; border-radius: 8px; border: 2px solid #fff; box-shadow: 0 1px 5px rgba(0,0,0,.45); color: #fff; font-size: 12px; line-height: 1.15; text-align: center; white-space: nowrap; transform: translate(-50%, -50%); }
+  .mapLabel strong { font-size: 13px; }
+  .mapLabel.ok { background: #16823a; }
+  .mapLabel.soon { background: #d88900; }
+  .mapLabel.overdue { background: #cc2323; }
+  .popupGrid { display: grid; grid-template-columns: auto auto; gap: 3px 10px; }
+  @media (max-width: 900px) {
+    body { margin: 10px; }
+    #map { height: 70vh; min-height: 420px; }
+    table { font-size: 13px; }
+    th, td { padding: 7px; }
+  }
 </style>
 </head>
 <body>
 <h1>Battery Replacement Schedule</h1>
 <div id="connectionStatus" class="statusbar warn">Loading shared schedule…</div>
 
-<div class="controls">
-  <button onclick="addLoop()">+ Add loop</button>
-  <button class="primary" onclick="publishChanges()">Publish changes</button>
-  <button onclick="loadShared()">Reload from GitHub</button>
+<div class="tabs">
+  <button id="tableTabButton" class="tabButton active" onclick="showTab('table')">Table</button>
+  <button id="mapTabButton" class="tabButton" onclick="showTab('map')">Map</button>
 </div>
 
-<div class="editor" id="editorBox">
-  <label for="githubToken"><strong>Editor token:</strong></label>
-  <input id="githubToken" type="password" autocomplete="off" placeholder="Paste token once on this device">
-  <button onclick="saveToken()">Remember token</button>
-  <button onclick="forgetToken()">Forget token</button>
-  <span id="tokenState"></span>
+<div id="tableTab" class="tabPanel active">
+  <div class="controls">
+    <button onclick="addLoop()">+ Add loop</button>
+    <button class="primary" onclick="publishChanges()">Publish changes</button>
+    <button onclick="loadShared()">Reload from GitHub</button>
+  </div>
+
+  <div class="editor" id="editorBox">
+    <label for="githubToken"><strong>Editor token:</strong></label>
+    <input id="githubToken" type="password" autocomplete="off" placeholder="Paste token once on this device">
+    <button onclick="saveToken()">Remember token</button>
+    <button onclick="forgetToken()">Forget token</button>
+    <span id="tokenState"></span>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th><button class="sortButton" onclick="sortLoops('name')">Loop <span id="sort-name"></span></button></th>
+        <th><button class="sortButton" onclick="sortLoops('lastChange')">Last change <span id="sort-lastChange"></span></button></th>
+        <th>Interval</th>
+        <th><button class="sortButton" onclick="sortLoops('nextChange')">Next change <span id="sort-nextChange"></span></button></th>
+        <th>Status</th>
+        <th>Coordinates</th>
+        <th>Order / actions</th>
+      </tr>
+    </thead>
+    <tbody id="tableBody"></tbody>
+  </table>
 </div>
 
-<table>
-  <thead>
-    <tr>
-      <th><button class="sortButton" onclick="sortLoops('name')">Loop <span id="sort-name"></span></button></th>
-      <th><button class="sortButton" onclick="sortLoops('lastChange')">Last change <span id="sort-lastChange"></span></button></th>
-      <th>Interval</th>
-      <th><button class="sortButton" onclick="sortLoops('nextChange')">Next change <span id="sort-nextChange"></span></button></th>
-      <th>Status</th>
-      <th>Order / actions</th>
-    </tr>
-  </thead>
-  <tbody id="tableBody"></tbody>
-</table>
+<div id="mapTab" class="tabPanel">
+  <div class="mapLegend">
+    <span class="legendItem"><span class="legendDot ok"></span> OK</span>
+    <span class="legendItem"><span class="legendDot soon"></span> Due soon</span>
+    <span class="legendItem"><span class="legendDot overdue"></span> Overdue</span>
+  </div>
+  <div id="map"></div>
+</div>
 
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/proj4@2.12.1/dist/proj4.js"></script>
 <script>
 const TOKEN_KEY = "batteryLoopsGithubTokenPersistent";
 const OWNER = "LukaszSobkowicz";
@@ -69,6 +117,11 @@ const DATA_PATH = "data.json";
 const DEFAULT_INTERVAL = 45;
 let loops = [];
 let sortState = { key: null, direction: 1 };
+let map = null;
+let markerLayer = null;
+let activeTab = "table";
+
+proj4.defs("EPSG:2177", "+proj=tmerc +lat_0=0 +lon_0=18 +k=0.999923 +x_0=6500000 +y_0=0 +ellps=GRS80 +units=m +no_defs +type=crs");
 
 function todayISO() {
   const d = new Date();
@@ -124,6 +177,22 @@ function forgetToken() {
   document.getElementById("githubToken").value = "";
   updateTokenState();
   setStatus("Editor token forgotten on this device.", "ok");
+}
+
+function showTab(tab) {
+  activeTab = tab;
+  document.getElementById("tableTab").classList.toggle("active", tab === "table");
+  document.getElementById("mapTab").classList.toggle("active", tab === "map");
+  document.getElementById("tableTabButton").classList.toggle("active", tab === "table");
+  document.getElementById("mapTabButton").classList.toggle("active", tab === "map");
+
+  if (tab === "map") {
+    initMap();
+    setTimeout(() => {
+      map.invalidateSize();
+      updateMap();
+    }, 0);
+  }
 }
 
 async function loadShared() {
@@ -225,6 +294,19 @@ function escapeHtml(value) {
   return String(value).replace(/[&<>'"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[c]));
 }
 
+function getLoopStatus(loop) {
+  const interval = Number(loop.interval) || DEFAULT_INTERVAL;
+  const next = calculateNext(loop.lastChange, interval);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const days = dateDiff(today, next);
+
+  if (days < 0) return { text: `${Math.abs(days)} days overdue`, css: "overdue", next, days };
+  if (days === 0) return { text: "Change today", css: "soon", next, days };
+  if (days <= 5) return { text: `${days} days`, css: "soon", next, days };
+  return { text: `${days} days`, css: "ok", next, days };
+}
+
 function updateSortIndicators() {
   ["name", "lastChange", "nextChange"].forEach(key => {
     const el = document.getElementById(`sort-${key}`);
@@ -269,26 +351,24 @@ function moveLoop(index, delta) {
 function render() {
   const body = document.getElementById("tableBody");
   body.innerHTML = "";
-  const today = new Date();
-  today.setHours(0,0,0,0);
 
   loops.forEach((loop, index) => {
     const interval = Number(loop.interval) || DEFAULT_INTERVAL;
-    const next = calculateNext(loop.lastChange, interval);
-    const days = dateDiff(today, next);
-    let status, css;
-    if (days < 0) { status = `${Math.abs(days)} days overdue`; css = "overdue"; }
-    else if (days === 0) { status = "Change today"; css = "soon"; }
-    else if (days <= 5) { status = `${days} days`; css = "soon"; }
-    else { status = `${days} days`; css = "okText"; }
+    const status = getLoopStatus(loop);
 
     const row = document.createElement("tr");
     row.innerHTML = `
-      <td><input value="${escapeHtml(loop.name)}" onchange="updateName(${index}, this.value)"></td>
-      <td><input type="date" value="${escapeHtml(loop.lastChange)}" onchange="updateDate(${index}, this.value)"></td>
+      <td><input value="${escapeHtml(loop.name || "")}" onchange="updateName(${index}, this.value)"></td>
+      <td><input type="date" value="${escapeHtml(loop.lastChange || "")}" onchange="updateDate(${index}, this.value)"></td>
       <td><input type="number" min="1" value="${interval}" style="width:70px" onchange="updateInterval(${index}, this.value)"> days</td>
-      <td>${formatDate(next)}</td>
-      <td class="${css}">${status}</td>
+      <td>${formatDate(status.next)}</td>
+      <td class="${status.css === "ok" ? "okText" : status.css}">${status.text}</td>
+      <td>
+        <div class="coordInputs">
+          <label>X</label><input type="number" step="any" value="${loop.x2177 ?? ""}" onchange="updateCoordinate(${index}, 'x2177', this.value)" placeholder="X">
+          <label>Y</label><input type="number" step="any" value="${loop.y2177 ?? ""}" onchange="updateCoordinate(${index}, 'y2177', this.value)" placeholder="Y">
+        </div>
+      </td>
       <td>
         <button class="orderButton" onclick="moveLoop(${index}, -1)" title="Move up" ${index === 0 ? "disabled" : ""}>↑</button>
         <button class="orderButton" onclick="moveLoop(${index}, 1)" title="Move down" ${index === loops.length - 1 ? "disabled" : ""}>↓</button>
@@ -299,14 +379,90 @@ function render() {
   });
 
   updateSortIndicators();
+  if (map) updateMap();
+}
+
+function hasCoordinates(loop) {
+  if (loop.x2177 === "" || loop.y2177 === "" || loop.x2177 == null || loop.y2177 == null) return false;
+  return Number.isFinite(Number(loop.x2177)) && Number.isFinite(Number(loop.y2177));
+}
+
+function toLatLng2177(loop) {
+  // Polish surveying notation: X = northing, Y = easting.
+  // Proj4 projected-coordinate order is [easting, northing], therefore pass [Y, X].
+  const result = proj4("EPSG:2177", "EPSG:4326", [Number(loop.y2177), Number(loop.x2177)]);
+  return [result[1], result[0]];
+}
+
+function initMap() {
+  if (map) return;
+  map = L.map("map", { zoomControl: true }).setView([52.0, 19.0], 6);
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 19,
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+  }).addTo(map);
+  markerLayer = L.layerGroup().addTo(map);
+}
+
+function updateMap() {
+  if (!map || !markerLayer) return;
+  markerLayer.clearLayers();
+  const bounds = [];
+
+  loops.forEach(loop => {
+    if (!hasCoordinates(loop)) return;
+
+    try {
+      const latLng = toLatLng2177(loop);
+      if (!Number.isFinite(latLng[0]) || !Number.isFinite(latLng[1])) return;
+      const status = getLoopStatus(loop);
+      const labelName = escapeHtml(loop.name || "Unnamed loop");
+      const labelStatus = escapeHtml(status.text);
+
+      const icon = L.divIcon({
+        className: "loopMapIcon",
+        html: `<div class="mapLabel ${status.css}"><strong>${labelName}</strong><span>${labelStatus}</span></div>`,
+        iconSize: [1, 1],
+        iconAnchor: [0, 0]
+      });
+
+      const marker = L.marker(latLng, { icon }).addTo(markerLayer);
+      marker.bindPopup(`
+        <strong>${labelName}</strong><br>
+        <div class="popupGrid">
+          <span>Status:</span><strong>${labelStatus}</strong>
+          <span>Last change:</span><span>${escapeHtml(loop.lastChange || "-")}</span>
+          <span>Next change:</span><span>${formatDate(status.next)}</span>
+          <span>X:</span><span>${escapeHtml(loop.x2177)}</span>
+          <span>Y:</span><span>${escapeHtml(loop.y2177)}</span>
+        </div>`);
+      bounds.push(latLng);
+    } catch (err) {
+      console.error("Could not plot loop", loop.name, err);
+    }
+  });
+
+  if (bounds.length === 1) map.setView(bounds[0], 16);
+  else if (bounds.length > 1) map.fitBounds(bounds, { padding: [50, 50], maxZoom: 17 });
+  else map.setView([52.0, 19.0], 6);
 }
 
 function markEdited() { setStatus("Unpublished changes — click Publish changes.", "warn"); }
-function updateName(index, value) { loops[index].name = value; markEdited(); }
+function updateName(index, value) { loops[index].name = value; markEdited(); if (map) updateMap(); }
 function updateDate(index, value) { loops[index].lastChange = value; markEdited(); render(); }
 function updateInterval(index, value) { loops[index].interval = Math.max(1, Number(value) || 1); markEdited(); render(); }
+function updateCoordinate(index, key, value) {
+  loops[index][key] = value.trim() === "" ? "" : Number(value);
+  markEdited();
+  if (map) updateMap();
+}
 function changedToday(index) { loops[index].lastChange = todayISO(); markEdited(); render(); }
-function addLoop() { loops.push({ name: `Loop ${loops.length + 1}`, lastChange: todayISO(), interval: DEFAULT_INTERVAL }); sortState = { key: null, direction: 1 }; markEdited(); render(); }
+function addLoop() {
+  loops.push({ name: `Loop ${loops.length + 1}`, lastChange: todayISO(), interval: DEFAULT_INTERVAL, x2177: "", y2177: "" });
+  sortState = { key: null, direction: 1 };
+  markEdited();
+  render();
+}
 function removeLoop(index) { loops.splice(index, 1); sortState = { key: null, direction: 1 }; markEdited(); render(); }
 
 updateTokenState();
