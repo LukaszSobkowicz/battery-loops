@@ -11,7 +11,9 @@
   .statusbar.ok { color: #167c2b; }
   .statusbar.warn { color: #9a6700; }
   .statusbar.error { color: #b42318; }
-  .controls { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 15px; }
+  .controls { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+  .editor { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 15px; padding: 10px; background: #fff; border: 1px solid #ddd; border-radius: 8px; }
+  .editor input { min-width: 280px; padding: 8px; }
   button { padding: 8px 12px; cursor: pointer; border: 1px solid #bbb; border-radius: 6px; background: white; }
   button.primary { font-weight: 700; }
   table { width: 100%; border-collapse: collapse; background: white; }
@@ -33,7 +35,13 @@
   <button class="primary" onclick="publishChanges()">Publish changes</button>
   <button onclick="reloadShared()">Reload shared data</button>
   <button onclick="resetLocalChanges()">Discard local changes</button>
-  <button onclick="forgetToken()">Forget editor token</button>
+</div>
+
+<div class="editor">
+  <label for="githubToken"><strong>Editor token:</strong></label>
+  <input id="githubToken" type="password" autocomplete="off" placeholder="Paste fine-grained GitHub token here">
+  <button onclick="rememberToken()">Use token</button>
+  <button onclick="forgetToken()">Forget token</button>
 </div>
 
 <table>
@@ -51,7 +59,7 @@
 </table>
 
 <p class="note">
-  Everyone loads the shared schedule from <strong>data.json</strong>. Editors can add, remove, or edit loops here and click <strong>Publish changes</strong> to commit the new JSON directly to GitHub. The GitHub token is entered at runtime and kept only in this browser session; it is never written into the repository.
+  Everyone loads the shared schedule from <strong>data.json</strong>. Editors can add, remove, or edit loops here and click <strong>Publish changes</strong> to commit the new JSON directly to GitHub. The GitHub token is kept only in this browser session and is never written into the repository.
 </p>
 
 <script>
@@ -88,18 +96,39 @@ function writeLocal() {
   localStorage.setItem(LOCAL_KEY, JSON.stringify(loops));
 }
 
-function getToken() {
-  let token = sessionStorage.getItem(TOKEN_KEY);
-  if (token) return token;
-  token = prompt("Paste a fine-grained GitHub token with Contents: Read and write access to LukaszSobkowicz/battery-loops. It will be kept only for this browser session.");
-  if (!token) return null;
-  token = token.trim();
+function rememberToken() {
+  const input = document.getElementById("githubToken");
+  const token = input.value.trim();
+  if (!token) {
+    setStatus("Paste the GitHub token into the Editor token field first.", "error");
+    input.focus();
+    return;
+  }
   sessionStorage.setItem(TOKEN_KEY, token);
-  return token;
+  input.value = "";
+  setStatus("Editor token stored for this browser session.", "ok");
+}
+
+function getToken() {
+  const saved = sessionStorage.getItem(TOKEN_KEY);
+  if (saved) return saved;
+
+  const input = document.getElementById("githubToken");
+  const token = input.value.trim();
+  if (token) {
+    sessionStorage.setItem(TOKEN_KEY, token);
+    input.value = "";
+    return token;
+  }
+
+  setStatus("Editor token required. Paste it into the Editor token field, then click Publish changes again.", "error");
+  input.focus();
+  return null;
 }
 
 function forgetToken() {
   sessionStorage.removeItem(TOKEN_KEY);
+  document.getElementById("githubToken").value = "";
   setStatus("Editor token removed from this browser session.", "ok");
 }
 
@@ -162,6 +191,9 @@ async function githubRequest(url, options = {}) {
 
 async function publishChanges() {
   try {
+    const token = getToken();
+    if (!token) return;
+
     setStatus("Publishing changes to GitHub…", "warn");
 
     const apiUrl = `https://api.github.com/repos/${OWNER}/${REPO}/contents/${DATA_PATH}?ref=${BRANCH}`;
